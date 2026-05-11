@@ -107,16 +107,16 @@ namespace Game
     enum BoneIndex : int {
         BONE_HEAD = 7,
         BONE_NECK = 6,
-        BONE_CHEST = 4,
+        BONE_CHEST = 5,
         BONE_PELVIS = 1,
-        BONE_LEFT_SHOULDER = 13,
-        BONE_RIGHT_SHOULDER = 39,
-        BONE_LEFT_HAND = 15,
-        BONE_RIGHT_HAND = 41,
-        BONE_LEFT_KNEE = 73,
-        BONE_RIGHT_KNEE = 82,
-        BONE_LEFT_FOOT = 74,
-        BONE_RIGHT_FOOT = 83,
+        BONE_LEFT_SHOULDER = 9,
+        BONE_RIGHT_SHOULDER = 13,
+        BONE_LEFT_HAND = 11,
+        BONE_RIGHT_HAND = 15,
+        BONE_LEFT_KNEE = 18,
+        BONE_RIGHT_KNEE = 21,
+        BONE_LEFT_FOOT = 19,
+        BONE_RIGHT_FOOT = 22,
     };
 
     struct BoneMatrix {
