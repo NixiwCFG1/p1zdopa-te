@@ -195,6 +195,7 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
 				OutputDebugStringA(buf);
 			}
 
+			Config::Initialize();
 			init = true;
 		}
 

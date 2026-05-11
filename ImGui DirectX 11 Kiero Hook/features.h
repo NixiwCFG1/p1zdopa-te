@@ -4,12 +4,21 @@
 #include "imgui/imgui.h"
 #include "blur.h"
 #include "spread.h"
+#include <algorithm>
+#include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <cstring>
 #include <string>
+#include <system_error>
+#include <unordered_map>
+#include <vector>
 #include <wininet.h>
+#include <shellapi.h>
 #include <ctime>
 #define _CRT_SECURE_NO_WARNINGS
 #pragma comment(lib, "wininet.lib")
+#pragma comment(lib, "Shell32.lib")
 
 namespace Settings
 {
@@ -122,6 +131,15 @@ namespace Hotkeys
     inline int FindBind(bool* toggle) {
         for (int i = 0; i < bind_count; i++)
             if (binds[i].toggle == toggle) return i;
+        return -1;
+    }
+
+    inline int FindBindByName(const char* name) {
+        if (!name) return -1;
+        for (int i = 0; i < bind_count; i++) {
+            if (binds[i].name && strcmp(binds[i].name, name) == 0)
+                return i;
+        }
         return -1;
     }
 
@@ -431,7 +449,563 @@ namespace Hotkeys
                     catNames[c], catCounts[c], catNamesList[c], catVksList[c]);
                 currentY += cat_anims[c].height + gap;
             }
+            }
         }
+    }
+
+namespace Config
+{
+    inline std::filesystem::path config_dir;
+    inline std::vector<std::string> config_names;
+    inline int selected_index = -1;
+    inline char name_buffer[64] = "default";
+    inline std::string active_config;
+    inline std::string status_message = "Ready";
+    inline bool initialized = false;
+
+    inline std::string Trim(const std::string& value) {
+        size_t begin = 0;
+        size_t end = value.size();
+        while (begin < end && (value[begin] == ' ' || value[begin] == '\t' || value[begin] == '\r' || value[begin] == '\n'))
+            ++begin;
+        while (end > begin && (value[end - 1] == ' ' || value[end - 1] == '\t' || value[end - 1] == '\r' || value[end - 1] == '\n'))
+            --end;
+        return value.substr(begin, end - begin);
+    }
+
+    inline std::string NormalizeName(std::string name) {
+        name = Trim(name);
+        if (name.size() >= 4) {
+            std::string ext = name.substr(name.size() - 4);
+            if (_stricmp(ext.c_str(), ".cfg") == 0)
+                name.resize(name.size() - 4);
+        }
+
+        std::string out;
+        out.reserve(name.size());
+        for (char ch : name) {
+            bool ok = (ch >= 'A' && ch <= 'Z') ||
+                      (ch >= 'a' && ch <= 'z') ||
+                      (ch >= '0' && ch <= '9') ||
+                      ch == ' ' || ch == '_' || ch == '-' || ch == '.';
+            out.push_back(ok ? ch : '_');
+        }
+
+        while (!out.empty() && (out.front() == ' ' || out.front() == '.'))
+            out.erase(out.begin());
+        while (!out.empty() && (out.back() == ' ' || out.back() == '.'))
+            out.pop_back();
+        if (out.size() > 48)
+            out.resize(48);
+        while (!out.empty() && (out.back() == ' ' || out.back() == '.'))
+            out.pop_back();
+        if (out.empty())
+            out = "default";
+        return out;
+    }
+
+    inline void SetInputName(const std::string& name) {
+        std::string normalized = NormalizeName(name);
+        strcpy_s(name_buffer, normalized.c_str());
+    }
+
+    inline std::filesystem::path& GetConfigDirectory() {
+        if (config_dir.empty()) {
+            char appdata[MAX_PATH] = {};
+            DWORD len = GetEnvironmentVariableA("APPDATA", appdata, MAX_PATH);
+            if (len > 0 && len < MAX_PATH) {
+                config_dir = std::filesystem::path(appdata) / "pizdopasta" / "configs";
+            } else {
+                std::error_code ec;
+                config_dir = std::filesystem::current_path(ec);
+                if (ec)
+                    config_dir = ".";
+                config_dir /= "pizdopasta";
+                config_dir /= "configs";
+            }
+        }
+        return config_dir;
+    }
+
+    inline std::string GetConfigDirectoryString() {
+        return GetConfigDirectory().string();
+    }
+
+    inline std::filesystem::path GetConfigPath(const std::string& name) {
+        return GetConfigDirectory() / (NormalizeName(name) + ".cfg");
+    }
+
+    inline void SetStatus(const std::string& text) {
+        status_message = text;
+    }
+
+    inline bool OpenFolder() {
+        std::error_code ec;
+        std::filesystem::create_directories(GetConfigDirectory(), ec);
+
+        const std::string folder = GetConfigDirectoryString();
+        HINSTANCE result = ShellExecuteA(nullptr, "open", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        if ((INT_PTR)result <= 32) {
+            SetStatus("Open folder failed");
+            return false;
+        }
+
+        SetStatus("Opened config folder");
+        return true;
+    }
+
+    inline int FindConfigIndex(const std::string& name) {
+        for (int i = 0; i < (int)config_names.size(); i++) {
+            if (_stricmp(config_names[i].c_str(), name.c_str()) == 0)
+                return i;
+        }
+        return -1;
+    }
+
+    inline void SelectByIndex(int index) {
+        if (index < 0 || index >= (int)config_names.size()) {
+            selected_index = -1;
+            return;
+        }
+        selected_index = index;
+        SetInputName(config_names[index]);
+    }
+
+    inline void SelectByName(const std::string& name) {
+        int idx = FindConfigIndex(name);
+        if (idx >= 0) {
+            SelectByIndex(idx);
+        } else {
+            selected_index = -1;
+            SetInputName(name);
+        }
+    }
+
+    inline bool ParseBool(const std::string& value, bool fallback) {
+        if (value == "1" || _stricmp(value.c_str(), "true") == 0 || _stricmp(value.c_str(), "yes") == 0 || _stricmp(value.c_str(), "on") == 0)
+            return true;
+        if (value == "0" || _stricmp(value.c_str(), "false") == 0 || _stricmp(value.c_str(), "no") == 0 || _stricmp(value.c_str(), "off") == 0)
+            return false;
+        return fallback;
+    }
+
+    inline int ParseInt(const std::string& value, int fallback) {
+        try {
+            return std::stoi(value);
+        } catch (...) {
+            return fallback;
+        }
+    }
+
+    inline float ParseFloat(const std::string& value, float fallback) {
+        try {
+            return std::stof(value);
+        } catch (...) {
+            return fallback;
+        }
+    }
+
+    inline bool ParseFloat4(const std::string& value, float out[4]) {
+        float a = 0.0f, b = 0.0f, c = 0.0f, d = 0.0f;
+        if (sscanf_s(value.c_str(), "%f,%f,%f,%f", &a, &b, &c, &d) != 4)
+            return false;
+        out[0] = a;
+        out[1] = b;
+        out[2] = c;
+        out[3] = d;
+        return true;
+    }
+
+    inline void WriteSetting(std::ofstream& file, const char* key, bool value) {
+        file << key << '=' << (value ? 1 : 0) << '\n';
+    }
+
+    inline void WriteSetting(std::ofstream& file, const char* key, int value) {
+        file << key << '=' << value << '\n';
+    }
+
+    inline void WriteSetting(std::ofstream& file, const char* key, float value) {
+        file << key << '=' << value << '\n';
+    }
+
+    inline void WriteSetting(std::ofstream& file, const char* key, const float* value) {
+        file << key << '=' << value[0] << ',' << value[1] << ',' << value[2] << ',' << value[3] << '\n';
+    }
+
+    inline void ApplySetting(const std::unordered_map<std::string, std::string>& values, const char* key, bool& value) {
+        auto it = values.find(key);
+        if (it != values.end())
+            value = ParseBool(it->second, value);
+    }
+
+    inline void ApplySetting(const std::unordered_map<std::string, std::string>& values, const char* key, int& value) {
+        auto it = values.find(key);
+        if (it != values.end())
+            value = ParseInt(it->second, value);
+    }
+
+    inline void ApplySetting(const std::unordered_map<std::string, std::string>& values, const char* key, float& value) {
+        auto it = values.find(key);
+        if (it != values.end())
+            value = ParseFloat(it->second, value);
+    }
+
+    inline void ApplySetting(const std::unordered_map<std::string, std::string>& values, const char* key, float* value) {
+        auto it = values.find(key);
+        if (it != values.end())
+            ParseFloat4(it->second, value);
+    }
+
+    inline std::unordered_map<std::string, std::string> ReadKeyValues(const std::filesystem::path& path) {
+        std::unordered_map<std::string, std::string> values;
+        std::ifstream file(path);
+        if (!file.is_open())
+            return values;
+
+        std::string line;
+        while (std::getline(file, line)) {
+            line = Trim(line);
+            if (line.empty() || line[0] == '#')
+                continue;
+            if (line.size() > 1 && line[0] == '/' && line[1] == '/')
+                continue;
+
+            size_t eq = line.find('=');
+            if (eq == std::string::npos)
+                continue;
+
+            std::string key = Trim(line.substr(0, eq));
+            std::string value = Trim(line.substr(eq + 1));
+            if (!key.empty())
+                values[key] = value;
+        }
+        return values;
+    }
+
+    inline std::string GetSelectedName();
+
+    inline void Refresh() {
+        std::string keep_name = GetSelectedName();
+        config_names.clear();
+
+        std::error_code ec;
+        std::filesystem::create_directories(GetConfigDirectory(), ec);
+
+        if (std::filesystem::exists(GetConfigDirectory(), ec)) {
+            for (std::filesystem::directory_iterator it(GetConfigDirectory(), std::filesystem::directory_options::skip_permission_denied, ec), end; it != end && !ec; it.increment(ec)) {
+                if (!it->is_regular_file(ec))
+                    continue;
+
+                std::filesystem::path path = it->path();
+                if (_stricmp(path.extension().string().c_str(), ".cfg") != 0)
+                    continue;
+                config_names.push_back(path.stem().string());
+            }
+        }
+
+        std::sort(config_names.begin(), config_names.end(), [](const std::string& a, const std::string& b) {
+            return _stricmp(a.c_str(), b.c_str()) < 0;
+        });
+
+        if (!keep_name.empty()) {
+            int idx = FindConfigIndex(keep_name);
+            if (idx >= 0) {
+                selected_index = idx;
+                return;
+            }
+        }
+
+        if (selected_index >= 0 && selected_index < (int)config_names.size())
+            return;
+
+        selected_index = config_names.empty() ? -1 : 0;
+    }
+
+    inline std::string GetSelectedName() {
+        if (selected_index >= 0 && selected_index < (int)config_names.size())
+            return config_names[selected_index];
+        return {};
+    }
+
+    inline void SaveSettings(std::ofstream& file) {
+#define CFG_BOOL(field) WriteSetting(file, "settings." #field, Settings::field)
+#define CFG_INT(field) WriteSetting(file, "settings." #field, Settings::field)
+#define CFG_FLOAT(field) WriteSetting(file, "settings." #field, Settings::field)
+#define CFG_FLOAT4(field) WriteSetting(file, "settings." #field, Settings::field)
+        CFG_BOOL(esp_enabled);
+        CFG_BOOL(esp_box);
+        CFG_INT(esp_box_style);
+        CFG_BOOL(esp_health);
+        CFG_BOOL(esp_armor);
+        CFG_BOOL(esp_name);
+        CFG_BOOL(esp_distance);
+        CFG_BOOL(esp_skeleton);
+        CFG_BOOL(esp_head_dot);
+        CFG_BOOL(esp_snaplines);
+        CFG_BOOL(esp_team);
+        CFG_FLOAT4(esp_color_enemy);
+        CFG_FLOAT4(esp_color_team);
+        CFG_FLOAT4(esp_color_skeleton);
+        CFG_BOOL(esp_glow);
+        CFG_FLOAT4(esp_glow_color_enemy);
+        CFG_FLOAT4(esp_glow_color_team);
+        CFG_BOOL(aim_enabled);
+        CFG_INT(aim_key);
+        CFG_FLOAT(aim_fov);
+        CFG_FLOAT(aim_smooth);
+        CFG_INT(aim_bone);
+        CFG_BOOL(aim_team);
+        CFG_BOOL(aim_visible_only);
+        CFG_BOOL(aim_fov_circle);
+        CFG_BOOL(trigger_enabled);
+        CFG_INT(trigger_key);
+        CFG_INT(trigger_delay);
+        CFG_BOOL(trigger_team);
+        CFG_BOOL(trigger_prospread);
+        CFG_BOOL(bhop_enabled);
+        CFG_BOOL(autostrafe);
+        CFG_BOOL(noflash_enabled);
+        CFG_FLOAT(noflash_alpha);
+        CFG_BOOL(radar_hack);
+        CFG_BOOL(warning_enabled);
+        CFG_BOOL(thirdperson);
+        CFG_INT(thirdperson_dist);
+        CFG_BOOL(auto_accept);
+        CFG_BOOL(auto_buy);
+        CFG_INT(auto_buy_preset);
+        CFG_BOOL(watermark);
+        CFG_BOOL(show_hotkeys);
+        CFG_BOOL(show_bombtimer);
+        CFG_BOOL(spectator_enemy);
+        CFG_INT(spectator_mode);
+        CFG_BOOL(spectator_only_enemies);
+        CFG_BOOL(crosshair_enabled);
+        CFG_INT(crosshair_size);
+        CFG_INT(crosshair_gap);
+        CFG_INT(crosshair_thickness);
+        CFG_FLOAT4(crosshair_color);
+        CFG_BOOL(fov_changer);
+        CFG_INT(fov_value);
+        CFG_BOOL(no_visual_recoil);
+        CFG_BOOL(custom_hud);
+        CFG_BOOL(grenade_tracer);
+        CFG_FLOAT(grenade_tracer_thickness);
+        CFG_FLOAT(grenade_trail_duration);
+        CFG_BOOL(grenade_prediction);
+        CFG_BOOL(bullet_tracer);
+        CFG_FLOAT(bullet_tracer_duration);
+        CFG_FLOAT4(bullet_tracer_color);
+        CFG_BOOL(spectator_list);
+        CFG_BOOL(rain_enabled);
+        CFG_INT(rain_intensity);
+        CFG_FLOAT(rain_speed);
+        CFG_FLOAT(rain_wind);
+        CFG_FLOAT(rain_alpha);
+        CFG_BOOL(world_modulation);
+        CFG_FLOAT4(world_color);
+        CFG_INT(world_mod_mode);
+        CFG_BOOL(trashtalk_enabled);
+#undef CFG_BOOL
+#undef CFG_INT
+#undef CFG_FLOAT
+#undef CFG_FLOAT4
+    }
+
+    inline void LoadSettings(const std::unordered_map<std::string, std::string>& values) {
+#define CFG_BOOL(field) ApplySetting(values, "settings." #field, Settings::field)
+#define CFG_INT(field) ApplySetting(values, "settings." #field, Settings::field)
+#define CFG_FLOAT(field) ApplySetting(values, "settings." #field, Settings::field)
+#define CFG_FLOAT4(field) ApplySetting(values, "settings." #field, Settings::field)
+        CFG_BOOL(esp_enabled);
+        CFG_BOOL(esp_box);
+        CFG_INT(esp_box_style);
+        CFG_BOOL(esp_health);
+        CFG_BOOL(esp_armor);
+        CFG_BOOL(esp_name);
+        CFG_BOOL(esp_distance);
+        CFG_BOOL(esp_skeleton);
+        CFG_BOOL(esp_head_dot);
+        CFG_BOOL(esp_snaplines);
+        CFG_BOOL(esp_team);
+        CFG_FLOAT4(esp_color_enemy);
+        CFG_FLOAT4(esp_color_team);
+        CFG_FLOAT4(esp_color_skeleton);
+        CFG_BOOL(esp_glow);
+        CFG_FLOAT4(esp_glow_color_enemy);
+        CFG_FLOAT4(esp_glow_color_team);
+        CFG_BOOL(aim_enabled);
+        CFG_INT(aim_key);
+        CFG_FLOAT(aim_fov);
+        CFG_FLOAT(aim_smooth);
+        CFG_INT(aim_bone);
+        CFG_BOOL(aim_team);
+        CFG_BOOL(aim_visible_only);
+        CFG_BOOL(aim_fov_circle);
+        CFG_BOOL(trigger_enabled);
+        CFG_INT(trigger_key);
+        CFG_INT(trigger_delay);
+        CFG_BOOL(trigger_team);
+        CFG_BOOL(trigger_prospread);
+        CFG_BOOL(bhop_enabled);
+        CFG_BOOL(autostrafe);
+        CFG_BOOL(noflash_enabled);
+        CFG_FLOAT(noflash_alpha);
+        CFG_BOOL(radar_hack);
+        CFG_BOOL(warning_enabled);
+        CFG_BOOL(thirdperson);
+        CFG_INT(thirdperson_dist);
+        CFG_BOOL(auto_accept);
+        CFG_BOOL(auto_buy);
+        CFG_INT(auto_buy_preset);
+        CFG_BOOL(watermark);
+        CFG_BOOL(show_hotkeys);
+        CFG_BOOL(show_bombtimer);
+        CFG_BOOL(spectator_enemy);
+        CFG_INT(spectator_mode);
+        CFG_BOOL(spectator_only_enemies);
+        CFG_BOOL(crosshair_enabled);
+        CFG_INT(crosshair_size);
+        CFG_INT(crosshair_gap);
+        CFG_INT(crosshair_thickness);
+        CFG_FLOAT4(crosshair_color);
+        CFG_BOOL(fov_changer);
+        CFG_INT(fov_value);
+        CFG_BOOL(no_visual_recoil);
+        CFG_BOOL(custom_hud);
+        CFG_BOOL(grenade_tracer);
+        CFG_FLOAT(grenade_tracer_thickness);
+        CFG_FLOAT(grenade_trail_duration);
+        CFG_BOOL(grenade_prediction);
+        CFG_BOOL(bullet_tracer);
+        CFG_FLOAT(bullet_tracer_duration);
+        CFG_FLOAT4(bullet_tracer_color);
+        CFG_BOOL(spectator_list);
+        CFG_BOOL(rain_enabled);
+        CFG_INT(rain_intensity);
+        CFG_FLOAT(rain_speed);
+        CFG_FLOAT(rain_wind);
+        CFG_FLOAT(rain_alpha);
+        CFG_BOOL(world_modulation);
+        CFG_FLOAT4(world_color);
+        CFG_INT(world_mod_mode);
+        CFG_BOOL(trashtalk_enabled);
+#undef CFG_BOOL
+#undef CFG_INT
+#undef CFG_FLOAT
+#undef CFG_FLOAT4
+    }
+
+    inline void SaveHotkeys(std::ofstream& file) {
+        WriteSetting(file, "hotkeys.casino_mode", Hotkeys::casino_mode);
+        for (int i = 0; i < Hotkeys::bind_count; i++) {
+            if (!Hotkeys::binds[i].name)
+                continue;
+
+            std::string prefix = std::string("hotkey.") + Hotkeys::binds[i].name;
+            WriteSetting(file, (prefix + ".vk").c_str(), Hotkeys::binds[i].vk);
+            WriteSetting(file, (prefix + ".mode").c_str(), Hotkeys::binds[i].mode);
+        }
+    }
+
+    inline void LoadHotkeys(const std::unordered_map<std::string, std::string>& values) {
+        ApplySetting(values, "hotkeys.casino_mode", Hotkeys::casino_mode);
+        for (int i = 0; i < Hotkeys::bind_count; i++) {
+            if (!Hotkeys::binds[i].name)
+                continue;
+
+            std::string prefix = std::string("hotkey.") + Hotkeys::binds[i].name;
+            ApplySetting(values, (prefix + ".vk").c_str(), Hotkeys::binds[i].vk);
+            ApplySetting(values, (prefix + ".mode").c_str(), Hotkeys::binds[i].mode);
+        }
+        Hotkeys::rebind_idx = -1;
+        Hotkeys::waiting_for_lmb = false;
+    }
+
+    inline bool Save(const std::string& raw_name) {
+        std::string name = NormalizeName(raw_name);
+        std::error_code ec;
+        std::filesystem::create_directories(GetConfigDirectory(), ec);
+
+        std::ofstream file(GetConfigPath(name), std::ios::out | std::ios::trunc);
+        if (!file.is_open()) {
+            SetStatus("Save failed: " + name);
+            return false;
+        }
+
+        file << "# PIZDOPASTA config\n";
+        file << "version=1\n";
+        SaveSettings(file);
+        SaveHotkeys(file);
+        file.close();
+
+        active_config = name;
+        SetInputName(name);
+        Refresh();
+        SelectByName(name);
+        SetStatus("Saved: " + name);
+        return true;
+    }
+
+    inline bool Load(const std::string& raw_name) {
+        std::string name = NormalizeName(raw_name);
+        std::filesystem::path path = GetConfigPath(name);
+        std::error_code ec;
+        if (!std::filesystem::exists(path, ec)) {
+            SetStatus("Load failed: " + name);
+            Refresh();
+            return false;
+        }
+
+        std::unordered_map<std::string, std::string> values = ReadKeyValues(path);
+        LoadSettings(values);
+        LoadHotkeys(values);
+        active_config = name;
+        SetInputName(name);
+        Refresh();
+        SelectByName(name);
+        SetStatus("Loaded: " + name);
+        return true;
+    }
+
+    inline bool Delete(const std::string& raw_name) {
+        std::string name = NormalizeName(raw_name);
+        std::filesystem::path path = GetConfigPath(name);
+        std::error_code ec;
+        bool existed = std::filesystem::exists(path, ec);
+        bool removed = false;
+        if (existed) {
+            std::filesystem::remove(path, ec);
+            removed = !ec;
+        }
+
+        int keep_index = selected_index;
+        if (removed && _stricmp(active_config.c_str(), name.c_str()) == 0)
+            active_config.clear();
+        Refresh();
+
+        if (!config_names.empty()) {
+            if (keep_index < 0 || keep_index >= (int)config_names.size())
+                keep_index = 0;
+            SelectByIndex(keep_index);
+        } else {
+            selected_index = -1;
+            SetInputName("default");
+        }
+
+        if (removed) {
+            SetStatus("Deleted: " + name);
+            return true;
+        }
+
+        SetStatus("Delete failed: " + name);
+        return false;
+    }
+
+    inline void Initialize() {
+        config_dir.clear();
+        GetConfigDirectory();
+        initialized = true;
+        Refresh();
     }
 }
 

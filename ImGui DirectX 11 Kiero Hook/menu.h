@@ -94,8 +94,12 @@ namespace Menu
             ImGui::SetCursorPos(ImVec2(0, 20));
             ImGui::BeginChild("##tabs", ImVec2(100, 430), false, ImGuiWindowFlags_NoBackground);
             {
-                const char* tab_names[] = { "legit", "visuals", "misc", "prikol" };
-                for (int i = 0; i < 4; i++) {
+                const char* tab_names[] = { "legit", "visuals", "misc", "prikol", "configs" };
+                const int tab_count = (int)(sizeof(tab_names) / sizeof(tab_names[0]));
+                if (active_tab < 0 || active_tab >= tab_count)
+                    active_tab = 0;
+
+                for (int i = 0; i < tab_count; i++) {
                     bool selected = (active_tab == i);
 
                     ImGui::SetCursorPosX(15);
@@ -219,6 +223,59 @@ namespace Menu
                     ImGui::Text("Last updated: %s", Settings::nigeria_last_update.c_str());
                     EndGroupbox();
 
+                }
+                else if (active_tab == 4) {
+                    BeginGroupbox("Config System", ImVec2(465, 390));
+                    ImGui::Text("Config name");
+                    ImGui::PushItemWidth(-1);
+                    if (ImGui::InputText("##config_name", Config::name_buffer, IM_ARRAYSIZE(Config::name_buffer), ImGuiInputTextFlags_EnterReturnsTrue)) {
+                        Config::Save(Config::name_buffer);
+                    }
+                    ImGui::PopItemWidth();
+
+                    ImGui::Spacing();
+                    if (ImGui::Button("Save", ImVec2(90, 0))) {
+                        Config::Save(Config::name_buffer);
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Load", ImVec2(90, 0))) {
+                        Config::Load(Config::name_buffer);
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Delete", ImVec2(90, 0))) {
+                        Config::Delete(Config::name_buffer);
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Refresh", ImVec2(90, 0))) {
+                        Config::Refresh();
+                    }
+
+                    ImGui::Text("Active: %s", Config::active_config.empty() ? "-" : Config::active_config.c_str());
+                    ImGui::TextWrapped("Status: %s", Config::status_message.c_str());
+                    ImGui::Separator();
+
+                    ImGui::BeginChild("##config_list", ImVec2(0, 205), true);
+                    if (Config::config_names.empty()) {
+                        ImGui::TextColored(ImColor(110, 110, 110), "No configs found");
+                    } else {
+                        for (int i = 0; i < (int)Config::config_names.size(); i++) {
+                            bool selected = (Config::selected_index == i);
+                            if (ImGui::Selectable(Config::config_names[i].c_str(), selected, 0, ImVec2(0, 0))) {
+                                Config::SelectByIndex(i);
+                            }
+                            if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) {
+                                Config::Load(Config::config_names[i]);
+                                break;
+                            }
+                        }
+                    }
+                    ImGui::EndChild();
+
+                    ImGui::Spacing();
+                    if (ImGui::Button("Open Folder", ImVec2(-1, 0))) {
+                        Config::OpenFolder();
+                    }
+                    EndGroupbox();
                 }
             }
             ImGui::EndChild();
