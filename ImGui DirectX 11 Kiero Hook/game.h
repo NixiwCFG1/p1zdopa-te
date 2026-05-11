@@ -2,7 +2,37 @@
 #include "cs2.h"
 #include <cmath>
 
-struct Vec3 { float x, y, z; };
+struct Vec3 { 
+    float x, y, z; 
+    
+    Vec3 operator-(const Vec3& other) const {
+        return { x - other.x, y - other.y, z - other.z };
+    }
+    
+    Vec3 operator+(const Vec3& other) const {
+        return { x + other.x, y + other.y, z + other.z };
+    }
+    
+    Vec3 operator*(float scalar) const {
+        return { x * scalar, y * scalar, z * scalar };
+    }
+    
+    Vec3 operator/(float scalar) const {
+        return { x / scalar, y / scalar, z / scalar };
+    }
+    
+    float Length() const {
+        return std::sqrtf(x * x + y * y + z * z);
+    }
+    
+    float LengthSqr() const {
+        return x * x + y * y + z * z;
+    }
+    
+    float DotProduct(const Vec3& other) const {
+        return x * other.x + y * other.y + z * other.z;
+    }
+};
 struct Vec2 { float x, y; };
 
 namespace Game
@@ -32,6 +62,7 @@ namespace Game
         constexpr uintptr_t m_pObserverServices = 0x11F8;
         constexpr uintptr_t m_pCameraServices = 0x1218;
         constexpr uintptr_t m_pMovementServices = 0x1220;
+        constexpr uintptr_t m_pWeaponServices = 0x11E0;
     }
     namespace weapon {
         constexpr uintptr_t m_pWeaponServices = 0x11E0;

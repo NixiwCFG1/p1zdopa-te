@@ -142,9 +142,11 @@ namespace Menu
 
                     ImGui::BeginGroup();
                     {
-                        BeginGroupbox("Triggerbot", ImVec2(225, 130));
+                        BeginGroupbox("Triggerbot", ImVec2(225, 160));
                         ImGui::Checkbox("Enabled ", &Settings::trigger_enabled);
                         HotkeyButton("Triggerbot", &Settings::trigger_enabled);
+
+                        ImGui::Checkbox("Pro Spread", &Settings::trigger_prospread);
 
                         ImGui::Text("Delay (ms)");
                         ImGui::PushItemWidth(-1);

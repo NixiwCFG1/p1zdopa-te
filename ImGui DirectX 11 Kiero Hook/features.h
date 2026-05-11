@@ -3,6 +3,7 @@
 #include "render3d.h"
 #include "imgui/imgui.h"
 #include "blur.h"
+#include "spread.h"
 #include <cstring>
 #include <string>
 #include <wininet.h>
@@ -41,6 +42,7 @@ namespace Settings
     inline int  trigger_key = VK_LMENU;
     inline int  trigger_delay = 0;
     inline bool trigger_team = false;
+    inline bool trigger_prospread = false;
     inline bool bhop_enabled = false;
     inline bool autostrafe = true;
     inline bool noflash_enabled = false;
@@ -673,7 +675,7 @@ namespace Triggerbot
 
     inline void Run() {
         if (!Settings::trigger_enabled || !CS2::initialized) return;
-        
+
         int bind_idx = Hotkeys::FindBind(&Settings::trigger_enabled);
         if (bind_idx >= 0 && Hotkeys::binds[bind_idx].vk != 0) {
             if (!(GetAsyncKeyState(Hotkeys::binds[bind_idx].vk) & 0x8000)) return;
@@ -684,14 +686,23 @@ namespace Triggerbot
         uintptr_t localPawn = CS2::GetLocalPlayerPawn();
         if (!localPawn) return;
 
-        int entIndex = CS2::Read<int>(localPawn + Game::pawn::m_iIDEntIndex);
-        if (entIndex <= 0) return;
-        uintptr_t targetEnt = CS2::GetEntityByIndex(entIndex);
-        if (!targetEnt) return;
-        int entHealth = CS2::Read<int>(targetEnt + Game::entity::m_iHealth);
-        if (entHealth <= 0) return;
-        int entTeam = (int)CS2::Read<uint8_t>(targetEnt + Game::entity::m_iTeamNum);
-        if (!Settings::trigger_team && entTeam == Game::localTeam) return;
+        bool shouldShoot = false;
+
+        if (Settings::trigger_prospread) {
+            shouldShoot = Spread::TriggerSpreadProSpread();
+        } else {
+            int entIndex = CS2::Read<int>(localPawn + Game::pawn::m_iIDEntIndex);
+            if (entIndex <= 0) return;
+            uintptr_t targetEnt = CS2::GetEntityByIndex(entIndex);
+            if (!targetEnt) return;
+            int entHealth = CS2::Read<int>(targetEnt + Game::entity::m_iHealth);
+            if (entHealth <= 0) return;
+            int entTeam = (int)CS2::Read<uint8_t>(targetEnt + Game::entity::m_iTeamNum);
+            if (!Settings::trigger_team && entTeam == Game::localTeam) return;
+            shouldShoot = true;
+        }
+
+        if (!shouldShoot) return;
 
         DWORD now = GetTickCount();
         if (now - lastShot < (DWORD)Settings::trigger_delay) return;
